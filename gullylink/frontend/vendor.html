@@ -1,121 +1,114 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Vendor Dashboard</title>
+    <title>GullyLink - Vendor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <style>
-        body { margin: 0; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
-        #map { flex: 1; }
-        #dashboard { height: 40%; background: #fff; padding: 20px; overflow-y: scroll; border-top: 2px solid #ccc; }
-        .order-card { background: #f9f9f9; padding: 15px; margin-bottom: 10px; border-left: 5px solid orange; border-radius: 5px; }
-        .btn-accept { background: green; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; }
-        .status-toggle { margin-bottom: 10px; }
+        body { display: flex; height: 100vh; margin: 0; font-family: sans-serif; }
+        #sidebar { width: 300px; background: #f4f4f4; padding: 20px; overflow-y: auto; box-shadow: 2px 0 5px rgba(0,0,0,0.1); }
+        #map { flex-grow: 1; }
+        .card { background: white; padding: 10px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .btn-accept { background: green; color: white; border: none; padding: 5px; width: 100%; cursor: pointer; margin-top: 5px; }
+        .btn-reject { background: red; color: white; border: none; padding: 5px; width: 100%; cursor: pointer; margin-top: 5px; }
+        .toggle-move { margin-bottom: 20px; padding: 10px; background: #333; color: white; cursor: pointer; text-align: center; }
     </style>
 </head>
 <body>
 
-    <div id="map"></div>
-
-    <div id="dashboard">
-        <div class="status-toggle">
-            <h3>Vendor Dashboard</h3>
-            <label>You are Online: <input type="checkbox" checked id="status-switch"></label>
-        </div>
-        <div id="order-list">
-            <p>Waiting for orders...</p>
-        </div>
+    <div id="sidebar">
+        <h2>Vendor Dashboard</h2>
+        <select id="vendorSelect" style="width:100%; padding:10px; margin-bottom:10px;">
+            <option value="v1">Chai Point (v1)</option>
+            <option value="v2">Burger Singh (v2)</option>
+            <option value="v3">Sharma Sweets (v3)</option>
+            <option value="v4">Pizza Hut (v4)</option>
+            <option value="v5">Gully Momos (v5)</option>
+        </select>
+        
+        <div class="toggle-move" onclick="toggleMovement()">🚀 Toggle Moving Simulation</div>
+        
+        <h3>Incoming Orders</h3>
+        <div id="ordersList">No orders yet...</div>
     </div>
 
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
-        // Generate a random Vendor ID for this session
-        const vendorId = "v" + Math.floor(Math.random() * 1000);
-        
-        // 1. Initialize Map
-        const map = L.map('map').setView([26.2183, 78.1828], 14);
+        const map = L.map('map').setView([28.6139, 77.2090], 14);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
-        // 2. Realtime Location Broadcast
-        const ws = new WebSocket(`ws://localhost:8000/ws/vendor/${vendorId}`);
+        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+        let currentVendorId = "v1";
+        let isMoving = false;
+        let moveInterval = null;
         let myMarker = null;
+        let currentLat = 28.6139;
+        let currentLng = 77.2090;
 
-        // Function to send location to server
-        function broadcastLocation(lat, lng) {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: "location_update",
-                    icon: "food", // Vendor can change this to 'veg'
-                    location: {lat: lat, lng: lng}
-                }));
-            }
-        }
+        document.getElementById('vendorSelect').addEventListener('change', (e) => {
+            currentVendorId = e.target.value;
+            alert("Switched to " + currentVendorId);
+        });
 
-        // Watch GPS Position
-        navigator.geolocation.watchPosition((pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-
-            // Move my own marker
-            if (myMarker) myMarker.setLatLng([lat, lng]);
-            else myMarker = L.marker([lat, lng]).addTo(map).bindPopup("You").openPopup();
-
-            map.setView([lat, lng]); // Center map on me
-            broadcastLocation(lat, lng);
-        }, (err) => console.error(err), { enableHighAccuracy: true });
-
-        // 3. Receive Orders
+        // Handle Incoming Orders
         ws.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            if (data.type === "new_order") {
-                // Check if order is for me (In MVP we broadcast to all, so we filter here)
-                if (data.order.vendor_id === vendorId) {
-                    showNewOrder(data.order);
-                }
+            if (data.type === 'new_order' && data.vendor_id === currentVendorId) {
+                addOrderCard(data.order);
             }
         };
 
-        function showNewOrder(order) {
-            const list = document.getElementById('order-list');
-            // Remove "waiting" text if exists
-            if (list.innerHTML.includes("Waiting")) list.innerHTML = "";
-
+        function addOrderCard(order) {
             const div = document.createElement('div');
-            div.className = "order-card";
+            div.className = 'card';
             div.innerHTML = `
-                <h4>New Order! ₹${order.total}</h4>
-                <p>Customer is 2 mins away.</p>
-                <button class="btn-accept" onclick="acceptOrder('${order._id}', ${order.user_location.lat}, ${order.user_location.lng})">Accept & Navigate</button>
+                <strong>Order #${order.id}</strong><br>
+                Item: ${order.item}<br>
+                Status: ${order.status}<br>
+                <button class="btn-accept" onclick="updateStatus(${order.id}, 'Accepted')">Accept</button>
+                <button class="btn-reject" onclick="updateStatus(${order.id}, 'Rejected')">Reject</button>
             `;
-            list.prepend(div);
-        }
-
-        // 4. Accept & Route
-        function acceptOrder(oid, uLat, uLng) {
-            // Draw line to customer (Simple straight line for MVP)
-            const myPos = myMarker.getLatLng();
-            const routeLine = L.polyline([myPos, [uLat, uLng]], {color: 'blue', weight: 4}).addTo(map);
-            map.fitBounds(routeLine.getBounds());
-
-            // Add pin for customer
-            L.marker([uLat, uLng]).addTo(map).bindPopup("Customer Location").openPopup();
-
-            alert("Order Accepted! Route displayed.");
+            document.getElementById('ordersList').prepend(div);
             
-            // Notify Backend
-            fetch(`http://localhost:8000/api/order/${oid}/status?status=accepted`, {method: 'POST'});
+            // Show Order Location on Map
+            L.marker([order.lat, order.lng]).addTo(map).bindPopup(`Order #${order.id} Location`).openPopup();
         }
 
-        // Initialize Vendor Profile on Load
-        fetch("http://localhost:8000/api/vendor/init", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                id: vendorId, name: "Raju Chaat", icon_type: "food",
-                location: {lat: 0, lng: 0}, menu: []
-            })
-        });
+        function updateStatus(orderId, status) {
+            ws.send(JSON.stringify({
+                type: "order_update",
+                order_id: orderId,
+                status: status
+            }));
+        }
 
+        // --- Moving Simulation ---
+        function toggleMovement() {
+            isMoving = !isMoving;
+            if (isMoving) {
+                moveInterval = setInterval(() => {
+                    // Jitter location slightly to simulate movement
+                    currentLat += (Math.random() - 0.5) * 0.001;
+                    currentLng += (Math.random() - 0.5) * 0.001;
+                    
+                    if (myMarker) map.removeLayer(myMarker);
+                    myMarker = L.marker([currentLat, currentLng]).addTo(map);
+
+                    // Send new location to server
+                    ws.send(JSON.stringify({
+                        type: "location_update",
+                        id: currentVendorId,
+                        lat: currentLat,
+                        lng: currentLng,
+                        icon: "🚚" // Dynamic icon
+                    }));
+                }, 2000); // Update every 2 seconds
+            } else {
+                clearInterval(moveInterval);
+            }
+        }
     </script>
 </body>
 </html>
